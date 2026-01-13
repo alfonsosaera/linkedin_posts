@@ -6,10 +6,15 @@ import sys
 import json
 import re
 import csv
+import base64
+import shutil
 import argparse
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
+
+import fitz  # PyMuPDF
+import requests
 
 # Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -300,10 +305,242 @@ def generate_checker_report(
 
 
 # ==========================
+# IMAGE EXTRACTION AND PROCESSING
+# ==========================
+def extract_images_from_pdf(pdf_path: str, min_size: int = 200) -> list[dict]:
+    """Extract all images from PDF using PyMuPDF.
+
+    Args:
+        pdf_path: Path to the PDF file
+        min_size: Minimum width/height to filter out small images (logos, icons)
+
+    Returns:
+        List of dicts with image data, extension, dimensions, and page number
+    """
+    doc = fitz.open(pdf_path)
+    images = []
+
+    for page_num, page in enumerate(doc):
+        for img in page.get_images():
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+
+            # Filter small images (likely icons/logos)
+            if base_image["width"] > min_size and base_image["height"] > min_size:
+                images.append({
+                    "data": base_image["image"],
+                    "ext": base_image["ext"],
+                    "width": base_image["width"],
+                    "height": base_image["height"],
+                    "page": page_num,
+                })
+
+    doc.close()
+    return images
+
+
+def upload_to_imgur(image_path: str) -> str | None:
+    """Upload image to Imgur anonymously, return URL.
+
+    Requires IMGUR_CLIENT_ID in environment variables.
+    """
+    client_id = os.getenv("IMGUR_CLIENT_ID")
+    if not client_id:
+        logging.warning("IMGUR_CLIENT_ID not set, skipping upload")
+        return None
+
+    with open(image_path, "rb") as f:
+        image_data = base64.b64encode(f.read()).decode("utf-8")
+
+    headers = {"Authorization": f"Client-ID {client_id}"}
+    response = requests.post(
+        "https://api.imgur.com/3/image",
+        headers=headers,
+        data={"image": image_data, "type": "base64"},
+        timeout=30,
+    )
+
+    if response.status_code == 200:
+        return response.json()["data"]["link"]
+    else:
+        logging.warning(f"Imgur upload failed: {response.status_code} - {response.text}")
+        return None
+
+
+def select_best_image(image_paths: list[str], paper_context: str) -> int | None:
+    """Use GPT-4o vision to select the most impactful figure.
+
+    Args:
+        image_paths: List of paths to candidate images
+        paper_context: Context about the paper (title, objective)
+
+    Returns:
+        Index of selected image, or None if no good candidates
+    """
+    if not image_paths:
+        return None
+
+    # Build messages with images for GPT-4o
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage
+
+    llm_vision = ChatOpenAI(model="gpt-4o")
+
+    # Encode images as base64
+    image_contents = []
+    for i, path in enumerate(image_paths):
+        with open(path, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        # Determine media type from extension
+        ext = Path(path).suffix.lower()
+        media_type = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }.get(ext, "image/png")
+
+        image_contents.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{img_b64}"}
+        })
+
+    prompt = f"""You are selecting the best figure from a scientific paper for a LinkedIn post.
+
+Paper context: {paper_context}
+
+I'm showing you {len(image_paths)} images extracted from this paper.
+Select the ONE image that would be most impactful and engaging for a LinkedIn post about this research.
+
+Criteria:
+- Prefer main result figures, architecture diagrams, or method overviews
+- Avoid supplementary figures, author photos, journal logos, or decorative elements
+- Choose figures that are visually clear and self-explanatory
+
+Respond with ONLY the number (1-{len(image_paths)}) of the best image.
+If none of the images are suitable for a LinkedIn post, respond with "NONE".
+"""
+
+    message = HumanMessage(content=[{"type": "text", "text": prompt}] + image_contents)
+
+    try:
+        response = llm_vision.invoke([message])
+        result = response.content.strip()
+
+        if result.upper() == "NONE":
+            return None
+
+        # Parse the number
+        selected = int(result) - 1  # Convert to 0-indexed
+        if 0 <= selected < len(image_paths):
+            return selected
+        else:
+            return None
+    except Exception as e:
+        logging.warning(f"Image selection failed: {e}")
+        return None
+
+
+def process_images(pdf_path: str, paper_context: str, upload: bool = True) -> dict | None:
+    """Extract images from PDF, optionally upload to Imgur, and select the best one.
+
+    Args:
+        pdf_path: Path to the PDF file
+        paper_context: Context about the paper for image selection
+        upload: If True, upload images to Imgur
+
+    Returns:
+        Dict with image metadata, or None if no suitable images
+    """
+    base, _ = os.path.splitext(pdf_path)
+
+    # Extract images
+    print("\n===== IMAGE EXTRACTION =====")
+    images = extract_images_from_pdf(pdf_path)
+
+    if not images:
+        print("No suitable images found in PDF.")
+        return None
+
+    print(f"Found {len(images)} candidate image(s).")
+
+    # Save images locally
+    image_paths = []
+    for i, img in enumerate(images):
+        ext = img["ext"] if img["ext"] != "jpeg" else "jpg"
+        img_path = f"{base}_{i + 1}.{ext}"
+        with open(img_path, "wb") as f:
+            f.write(img["data"])
+        image_paths.append(img_path)
+        print(f"  Saved: {img_path}")
+
+    # Upload to Imgur (if enabled)
+    image_data = []
+    if upload:
+        print("\nUploading to Imgur...")
+        for path in image_paths:
+            url = upload_to_imgur(path)
+            image_data.append({
+                "filename": os.path.basename(path),
+                "url": url,
+            })
+            if url:
+                print(f"  Uploaded: {os.path.basename(path)} -> {url}")
+            else:
+                print(f"  Failed: {os.path.basename(path)}")
+    else:
+        print("\nSkipping Imgur upload.")
+        for path in image_paths:
+            image_data.append({
+                "filename": os.path.basename(path),
+                "url": None,
+            })
+
+    # Select best image using vision model
+    print("\nSelecting best image...")
+    selected_idx = select_best_image(image_paths, paper_context)
+
+    selected_path = None
+    if selected_idx is not None:
+        print(f"  Selected: {image_data[selected_idx]['filename']}")
+
+        # Copy selected image to {basename}_selected.{ext}
+        selected_src = image_paths[selected_idx]
+        ext = Path(selected_src).suffix
+        selected_path = f"{base}_selected{ext}"
+        shutil.copy2(selected_src, selected_path)
+        print(f"  Copied to: {selected_path}")
+    else:
+        print("  No suitable image selected.")
+
+    # Build result
+    result = {
+        "selected_index": selected_idx,
+        "selected_file": os.path.basename(selected_path) if selected_path else None,
+        "images": image_data,
+    }
+
+    # Save images.json
+    json_path = f"{base}.images.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+    print(f"Saved: {json_path}")
+
+    return result
+
+
+# ==========================
 # PROCESS ONE PDF
 # ==========================
-def process_pdf(pdf_path: str):
-    """Process a PDF and generate LinkedIn post with validation."""
+def process_pdf(pdf_path: str, upload_images: bool = True):
+    """Process a PDF and generate LinkedIn post with validation.
+
+    Args:
+        pdf_path: Path to the PDF file
+        upload_images: If True, upload extracted images to Imgur
+    """
     print(f"\n=== Processing PDF: {pdf_path} ===")
 
     # Initialize checkers
@@ -338,6 +575,9 @@ def process_pdf(pdf_path: str):
     bullet_points = parsed.get("bullet_points", "")
     supporting_text_list = parsed.get("supporting_text_list", "")
     links_block = parsed.get("links_block", "")
+
+    # Process images: extract, upload to Imgur, select best
+    process_images(pdf_path, objective_sentence, upload=upload_images)
 
     # Stage 2: Generate LinkedIn post with validation
     print("\n===== LINKEDIN STAGE =====")
@@ -428,10 +668,59 @@ def generate_buffer_csv(input_dir: str):
 
         for txt_file in txt_files:
             post_content = txt_file.read_text(encoding="utf-8")
-            writer.writerow([post_content, "", "", ""])
-            print(f"  Added: {txt_file.name}")
+
+            # Look for corresponding .images.json file
+            image_url = ""
+            images_json_path = txt_file.with_suffix(".images.json")
+            if images_json_path.exists():
+                try:
+                    with open(images_json_path, "r", encoding="utf-8") as img_f:
+                        img_data = json.load(img_f)
+                    selected_idx = img_data.get("selected_index")
+                    if selected_idx is not None and img_data.get("images"):
+                        selected_img = img_data["images"][selected_idx]
+                        image_url = selected_img.get("url", "")
+                except (json.JSONDecodeError, IndexError, KeyError) as e:
+                    logging.warning(f"Error reading {images_json_path}: {e}")
+
+            writer.writerow([post_content, image_url, "", ""])
+            if image_url:
+                print(f"  Added: {txt_file.name} (with image)")
+            else:
+                print(f"  Added: {txt_file.name}")
 
     print(f"\nSaved: {output_path}")
+
+
+# ==========================
+# CLI HELPER
+# ==========================
+def run_generate(folder: str, upload_images: bool = True):
+    """Process all PDFs in a folder.
+
+    Args:
+        folder: Path to folder containing PDF files
+        upload_images: If True, upload extracted images to Imgur
+    """
+    if not os.path.isdir(folder):
+        print(f"Error: {folder} is not a folder.")
+        sys.exit(1)
+
+    pdfs = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
+
+    if not pdfs:
+        print("No PDF files found.")
+        sys.exit(0)
+
+    print(f"Found {len(pdfs)} PDF(s).")
+    if not upload_images:
+        print("Imgur upload disabled (images will be extracted locally).")
+
+    for pdf_name in pdfs:
+        pdf_path = os.path.join(folder, pdf_name)
+        process_pdf(pdf_path, upload_images=upload_images)
+
+    print("Done generating posts.")
 
 
 # ==========================
@@ -453,6 +742,11 @@ if __name__ == "__main__":
         required=True,
         help="Path to a folder containing PDF files."
     )
+    generate_parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Skip Imgur upload (images are still extracted locally)."
+    )
 
     # Step 2: Create Buffer CSV from posts
     csv_parser = subparsers.add_parser(
@@ -465,28 +759,33 @@ if __name__ == "__main__":
         help="Path to a folder containing .txt LinkedIn posts."
     )
 
+    # Full workflow: generate + csv
+    all_parser = subparsers.add_parser(
+        "all",
+        help="Run full workflow: generate posts from PDFs, then create Buffer CSV"
+    )
+    all_parser.add_argument(
+        "--input", "-i",
+        required=True,
+        help="Path to a folder containing PDF files."
+    )
+    all_parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Skip Imgur upload (images are still extracted locally)."
+    )
+
     args = parser.parse_args()
 
     if args.command == "generate":
-        folder = args.input
-
-        if not os.path.isdir(folder):
-            print(f"Error: {folder} is not a folder.")
-            sys.exit(1)
-
-        pdfs = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
-
-        if not pdfs:
-            print("No PDF files found.")
-            sys.exit(0)
-
-        print(f"Found {len(pdfs)} PDF(s).")
-
-        for pdf_name in pdfs:
-            pdf_path = os.path.join(folder, pdf_name)
-            process_pdf(pdf_path)
-
-        print("Done.")
+        run_generate(args.input, upload_images=not args.no_upload)
 
     elif args.command == "csv":
+        generate_buffer_csv(args.input)
+
+    elif args.command == "all":
+        run_generate(args.input, upload_images=not args.no_upload)
+        print("\n" + "=" * 50)
+        print("Creating Buffer CSV...")
+        print("=" * 50)
         generate_buffer_csv(args.input)
