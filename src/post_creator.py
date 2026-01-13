@@ -5,15 +5,33 @@ import os
 import sys
 import json
 import re
+import csv
 import argparse
+import logging
+from pathlib import Path
 from dotenv import load_dotenv
+
+# Add src directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+from checkers import (
+    ExtractionChecker,
+    LinkedInChecker,
+    generate_with_retry,
+    CheckResult,
+)
+
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 # ==========================
 # MODELS
@@ -162,6 +180,40 @@ Output ONLY the final LinkedIn post. No labels, no extra comments.
 
 
 # ==========================
+# RETRY PROMPT TEMPLATES
+# ==========================
+EXTRACTION_RETRY_TEMPLATE = """
+Your previous extraction attempt had issues that need to be corrected.
+
+PREVIOUS OUTPUT:
+{previous_output}
+
+FEEDBACK TO ADDRESS:
+{feedback}
+
+Please regenerate the extraction, fixing all the issues mentioned above.
+Make sure to output valid JSON with all required fields.
+
+{original_prompt}
+"""
+
+LINKEDIN_RETRY_TEMPLATE = """
+Your previous LinkedIn post had issues that need to be corrected.
+
+PREVIOUS POST:
+{previous_output}
+
+FEEDBACK TO ADDRESS:
+{feedback}
+
+Please regenerate the LinkedIn post, fixing all the issues mentioned above.
+Follow all the original formatting and style rules carefully.
+
+{original_prompt}
+"""
+
+
+# ==========================
 # PAIR BULLET POINTS WITH SUPPORTING TEXT
 # ==========================
 def create_paired_markdown(bullet_points: str, supporting_text_list: str) -> str:
@@ -190,42 +242,125 @@ def create_paired_markdown(bullet_points: str, supporting_text_list: str) -> str
 
 
 # ==========================
+# HELPER FUNCTIONS
+# ==========================
+def log_check_results(stage: str, checks: list[CheckResult]):
+    """Log checker results for a pipeline stage."""
+    logger = logging.getLogger(f"Checker.{stage}")
+
+    for i, check in enumerate(checks):
+        status = "PASSED" if check.passed else "FAILED"
+        logger.info(f"Attempt {i + 1}: {status}")
+
+        if check.rule_failures:
+            for failure in check.rule_failures:
+                logger.warning(f"  Rule: {failure}")
+
+        if check.score is not None:
+            logger.info(f"  LLM Score: {check.score:.2f}")
+
+        if check.llm_feedback:
+            logger.info(f"  LLM Feedback: {check.llm_feedback[:100]}...")
+
+
+def generate_checker_report(
+    extract_checks: list[CheckResult], linkedin_checks: list[CheckResult]
+) -> dict:
+    """Generate a structured report of all check results."""
+    return {
+        "extraction": {
+            "total_attempts": len(extract_checks),
+            "final_passed": extract_checks[-1].passed if extract_checks else False,
+            "final_score": extract_checks[-1].score if extract_checks else None,
+            "attempts": [
+                {
+                    "passed": c.passed,
+                    "score": c.score,
+                    "rule_failures": c.rule_failures,
+                    "llm_feedback": c.llm_feedback,
+                }
+                for c in extract_checks
+            ],
+        },
+        "linkedin": {
+            "total_attempts": len(linkedin_checks),
+            "final_passed": linkedin_checks[-1].passed if linkedin_checks else False,
+            "final_score": linkedin_checks[-1].score if linkedin_checks else None,
+            "attempts": [
+                {
+                    "passed": c.passed,
+                    "score": c.score,
+                    "rule_failures": c.rule_failures,
+                    "llm_feedback": c.llm_feedback,
+                }
+                for c in linkedin_checks
+            ],
+        },
+    }
+
+
+# ==========================
 # PROCESS ONE PDF
 # ==========================
 def process_pdf(pdf_path: str):
+    """Process a PDF and generate LinkedIn post with validation."""
     print(f"\n=== Processing PDF: {pdf_path} ===")
+
+    # Initialize checkers
+    extraction_checker = ExtractionChecker(max_retries=3, min_quality_score=0.7)
+    linkedin_checker = LinkedInChecker(max_retries=3, min_quality_score=0.75)
 
     # Load PDF
     loader = PyPDFLoader(pdf_path)
     docs = loader.load()
     paper_text = "\n".join(d.page_content for d in docs)
 
-    # Extract JSON
+    # Stage 1: Extract with validation
+    print("\n===== EXTRACTION STAGE =====")
     extract_prompt = PromptTemplate.from_template(EXTRACT_PROMPT_TEMPLATE_STR)
     extract_chain = extract_prompt | llm_extract | StrOutputParser()
-    json_str = extract_chain.invoke({"paper_text": paper_text})
 
-    print("\n===== RAW JSON =====\n")
+    parsed, extract_checks = generate_with_retry(
+        chain=extract_chain,
+        initial_inputs={"paper_text": paper_text},
+        checker=extraction_checker,
+        retry_prompt_template=EXTRACTION_RETRY_TEMPLATE,
+        original_prompt_str=EXTRACT_PROMPT_TEMPLATE_STR,
+        parse_output=json.loads,
+        max_retries=3,
+        llm=llm_extract,
+    )
 
-    parsed = json.loads(json_str)
+    # Log extraction results
+    log_check_results("Extraction", extract_checks)
+
     objective_sentence = parsed.get("objective_sentence", "")
     bullet_points = parsed.get("bullet_points", "")
     supporting_text_list = parsed.get("supporting_text_list", "")
     links_block = parsed.get("links_block", "")
 
-    # LinkedIn post
+    # Stage 2: Generate LinkedIn post with validation
+    print("\n===== LINKEDIN STAGE =====")
     linkedin_prompt = PromptTemplate.from_template(LINKEDIN_PROMPT_TEMPLATE_STR)
     linkedin_chain = linkedin_prompt | llm_linkedin | StrOutputParser()
 
-    linkedin_post = linkedin_chain.invoke(
-        {
+    linkedin_post, linkedin_checks = generate_with_retry(
+        chain=linkedin_chain,
+        initial_inputs={
             "objective_sentence": objective_sentence,
             "bullet_points": bullet_points,
             "links_block": links_block,
-        }
+        },
+        checker=linkedin_checker,
+        retry_prompt_template=LINKEDIN_RETRY_TEMPLATE,
+        original_prompt_str=LINKEDIN_PROMPT_TEMPLATE_STR,
+        parse_output=lambda x: x,  # Already a string
+        max_retries=3,
+        llm=llm_linkedin,
     )
 
-    print("\n===== LINKEDIN POST =====\n")
+    # Log LinkedIn results
+    log_check_results("LinkedIn", linkedin_checks)
 
     # Generate paired markdown
     paired_md = create_paired_markdown(bullet_points, supporting_text_list)
@@ -235,11 +370,13 @@ def process_pdf(pdf_path: str):
     txt_path = base + ".txt"
     json_path = base + ".json"
     md_path = base + ".md"
+    report_path = base + "_checker_report.json"
 
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(linkedin_post)
     print(f"Saved: {txt_path}")
 
+    json_str = json.dumps(parsed, indent=2, ensure_ascii=False)
     with open(json_path, "w", encoding="utf-8") as f:
         f.write(json_str)
     print(f"Saved: {json_path}")
@@ -248,40 +385,108 @@ def process_pdf(pdf_path: str):
         f.write(paired_md)
     print(f"Saved: {md_path}")
 
+    # Save checker report
+    report = generate_checker_report(extract_checks, linkedin_checks)
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+    print(f"Saved: {report_path}")
+
+    return {
+        "extraction_checks": extract_checks,
+        "linkedin_checks": linkedin_checks,
+        "final_post": linkedin_post,
+    }
+
 
 # ==========================
-# CLI — SIMPLE FOLDER MODE
+# GENERATE BUFFER CSV
+# ==========================
+def generate_buffer_csv(input_dir: str):
+    """Generate Buffer-compatible CSV from LinkedIn post .txt files."""
+    input_path = Path(input_dir)
+
+    if not input_path.is_dir():
+        print(f"Error: {input_dir} is not a directory.")
+        sys.exit(1)
+
+    # Find all .txt files (LinkedIn posts), sorted case-insensitively
+    txt_files = sorted(input_path.glob("*.txt"), key=lambda f: f.name.lower())
+
+    if not txt_files:
+        print("No .txt files found.")
+        sys.exit(0)
+
+    print(f"Found {len(txt_files)} LinkedIn post(s).")
+
+    # Output path with 000 prefix to sort to top
+    output_path = input_path / "000_buffer_upload.csv"
+
+    # Write CSV with UTF-8 BOM for emoji support
+    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Text", "Image URL", "Tags", "Posting Time"])
+
+        for txt_file in txt_files:
+            post_content = txt_file.read_text(encoding="utf-8")
+            writer.writerow([post_content, "", "", ""])
+            print(f"  Added: {txt_file.name}")
+
+    print(f"\nSaved: {output_path}")
+
+
+# ==========================
+# CLI
 # ==========================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generate LinkedIn posts from PDFs in a folder."
+        description="Generate LinkedIn posts from PDFs and export to Buffer CSV."
     )
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    parser.add_argument(
-        "--input",
-        "-i",
+    # Step 1: Generate posts from PDFs
+    generate_parser = subparsers.add_parser(
+        "generate",
+        help="Process PDFs and generate LinkedIn posts"
+    )
+    generate_parser.add_argument(
+        "--input", "-i",
         required=True,
         help="Path to a folder containing PDF files."
     )
 
+    # Step 2: Create Buffer CSV from posts
+    csv_parser = subparsers.add_parser(
+        "csv",
+        help="Generate Buffer CSV from existing LinkedIn posts (.txt files)"
+    )
+    csv_parser.add_argument(
+        "--input", "-i",
+        required=True,
+        help="Path to a folder containing .txt LinkedIn posts."
+    )
+
     args = parser.parse_args()
 
-    folder = args.input
+    if args.command == "generate":
+        folder = args.input
 
-    if not os.path.isdir(folder):
-        print(f"Error: {folder} is not a folder.")
-        sys.exit(1)
+        if not os.path.isdir(folder):
+            print(f"Error: {folder} is not a folder.")
+            sys.exit(1)
 
-    pdfs = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
+        pdfs = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
 
-    if not pdfs:
-        print("No PDF files found.")
-        sys.exit(0)
+        if not pdfs:
+            print("No PDF files found.")
+            sys.exit(0)
 
-    print(f"Found {len(pdfs)} PDF(s).")
+        print(f"Found {len(pdfs)} PDF(s).")
 
-    for pdf_name in pdfs:
-        pdf_path = os.path.join(folder, pdf_name)
-        process_pdf(pdf_path)
+        for pdf_name in pdfs:
+            pdf_path = os.path.join(folder, pdf_name)
+            process_pdf(pdf_path)
 
-    print("Done.")
+        print("Done.")
+
+    elif args.command == "csv":
+        generate_buffer_csv(args.input)
