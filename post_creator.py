@@ -143,7 +143,6 @@ Share your ideas, methods, and tools in the comments! 👇 💬
 7) LINKS (after ending)
 - Show ONLY non-empty lines of {links_block}.  
 - Omit empty Code/Website lines.  
-- Raw URLs only.  
 
 ---------------------------- STYLE RULES ----------------------------
 - Final post must be very short and concise.  
