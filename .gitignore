@@ -1,3 +1,6 @@
+# environment variables
+.env
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -9,6 +12,5 @@ wheels/
 # Virtual environments
 .venv
 
-# Input PDFs and generated output
+# Input PDFs and generated files
 /input/
-/output/

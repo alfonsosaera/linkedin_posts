@@ -192,7 +192,7 @@ def create_paired_markdown(bullet_points: str, supporting_text_list: str) -> str
 # ==========================
 # PROCESS ONE PDF
 # ==========================
-def process_pdf(pdf_path: str, output_dir: str):
+def process_pdf(pdf_path: str):
     print(f"\n=== Processing PDF: {pdf_path} ===")
 
     # Load PDF
@@ -230,12 +230,11 @@ def process_pdf(pdf_path: str, output_dir: str):
     # Generate paired markdown
     paired_md = create_paired_markdown(bullet_points, supporting_text_list)
 
-    # Save outputs to output directory
-    pdf_name = os.path.basename(pdf_path)
-    base_name, _ = os.path.splitext(pdf_name)
-    txt_path = os.path.join(output_dir, base_name + ".txt")
-    json_path = os.path.join(output_dir, base_name + ".json")
-    md_path = os.path.join(output_dir, base_name + ".md")
+    # Save outputs next to the PDF
+    base, _ = os.path.splitext(pdf_path)
+    txt_path = base + ".txt"
+    json_path = base + ".json"
+    md_path = base + ".md"
 
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(linkedin_post)
@@ -264,24 +263,13 @@ if __name__ == "__main__":
         required=True,
         help="Path to a folder containing PDF files."
     )
-    parser.add_argument(
-        "--output",
-        "-o",
-        required=True,
-        help="Path to output folder for generated files."
-    )
 
     args = parser.parse_args()
 
     folder = args.input
-    output_dir = args.output
 
     if not os.path.isdir(folder):
         print(f"Error: {folder} is not a folder.")
-        sys.exit(1)
-
-    if not os.path.isdir(output_dir):
-        print(f"Error: {output_dir} is not a folder.")
         sys.exit(1)
 
     pdfs = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
@@ -294,6 +282,6 @@ if __name__ == "__main__":
 
     for pdf_name in pdfs:
         pdf_path = os.path.join(folder, pdf_name)
-        process_pdf(pdf_path, output_dir)
+        process_pdf(pdf_path)
 
     print("Done.")

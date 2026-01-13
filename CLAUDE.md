@@ -13,7 +13,6 @@ linkedin_posts/
 ├── src/
 │   └── post_creator.py      # Main application
 ├── input/                   # Place PDFs here to process
-├── output/                  # Generated files (json, txt, md)
 ├── templates/
 │   └── Buffer_LinkedIn_Template.csv
 ├── .env
@@ -29,7 +28,7 @@ linkedin_posts/
 uv sync
 
 # Run the application
-uv run python src/post_creator.py --input input/ --output output/
+uv run python src/post_creator.py --input input/
 ```
 
 ## Architecture
@@ -53,8 +52,8 @@ PDF → Extract Chain → JSON → LinkedIn Chain → Final Post
 ## Data Flow
 
 1. Place PDF files in `input/` directory
-2. Run the script with `--input input/ --output output/`
-3. For each PDF, generates in `output/`:
+2. Run the script with `--input input/`
+3. For each PDF, generates files next to the original PDF:
    - `{filename}.json` - extracted structured data
    - `{filename}.txt` - final LinkedIn post
    - `{filename}.md` - bullet points paired with supporting text
