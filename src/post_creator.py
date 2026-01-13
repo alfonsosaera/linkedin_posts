@@ -4,6 +4,7 @@
 import os
 import sys
 import json
+import re
 import argparse
 from dotenv import load_dotenv
 
@@ -51,13 +52,14 @@ publication full author list is: Mingze Dong, David G. Su, Harriet Kluger, Rong 
 If one or more fields are not clear, just leave the labeled field:
 discuss the publication “{{publication title}}” published in {{publication journal}} by {{publication full author list of the scientific publication}}
 
-4.- Provide the main points as a bullet point list.  
-The number of bullet points must depend on the content (do NOT force 10 items).  
-Use only information explicitly present in the full paper text (not only abstract).  
-Avoid inference based on external knowledge.  
-Number items as 5.001., 5.002., etc. (increment second digits, keep 5 constant).  
+4.- Provide the main points as a bullet point list.
+The number of bullet points must depend on the content (do NOT force 10 items).
+Use only information explicitly present in the full paper text (not only abstract).
+Avoid inference based on external knowledge.
+Number items as 5.001., 5.002., etc. (increment second digits, keep 5 constant).
 
-After the numbered list, output another list containing **the supporting text** for each point. 
+After the numbered list, output another list containing **the supporting text** for each point.
+Use the SAME numbering format: 5.001. "supporting text here", 5.002. "supporting text here", etc.
 First the main points, then the supporting texts.
 
 5.- Provide this block if possible; keep text, icons and emojis:
@@ -160,9 +162,37 @@ Output ONLY the final LinkedIn post. No labels, no extra comments.
 
 
 # ==========================
+# PAIR BULLET POINTS WITH SUPPORTING TEXT
+# ==========================
+def create_paired_markdown(bullet_points: str, supporting_text_list: str) -> str:
+    """Parse bullet points and supporting texts, return paired Markdown."""
+
+    # Parse bullet points (format: "5.001. Text here")
+    bullet_pattern = re.compile(r"(5\.\d{3})\.\s*(.+?)(?=5\.\d{3}\.|$)", re.DOTALL)
+    bullets = bullet_pattern.findall(bullet_points)
+
+    # Parse supporting texts (same numbering format)
+    support_pattern = re.compile(r"(5\.\d{3})\.\s*(.+?)(?=5\.\d{3}\.|$)", re.DOTALL)
+    supports = support_pattern.findall(supporting_text_list)
+
+    # Create lookup for supporting texts
+    support_dict = {num: text.strip() for num, text in supports}
+
+    # Build Markdown
+    lines = []
+    for num, text in bullets:
+        lines.append(f"## {num}. {text.strip()}\n")
+        if num in support_dict:
+            lines.append(f"{support_dict[num]}\n")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ==========================
 # PROCESS ONE PDF
 # ==========================
-def process_pdf(pdf_path: str):
+def process_pdf(pdf_path: str, output_dir: str):
     print(f"\n=== Processing PDF: {pdf_path} ===")
 
     # Load PDF
@@ -180,6 +210,7 @@ def process_pdf(pdf_path: str):
     parsed = json.loads(json_str)
     objective_sentence = parsed.get("objective_sentence", "")
     bullet_points = parsed.get("bullet_points", "")
+    supporting_text_list = parsed.get("supporting_text_list", "")
     links_block = parsed.get("links_block", "")
 
     # LinkedIn post
@@ -196,10 +227,15 @@ def process_pdf(pdf_path: str):
 
     print("\n===== LINKEDIN POST =====\n")
 
-    # Save outputs next to the PDF
-    base, _ = os.path.splitext(pdf_path)
-    txt_path = base + ".txt"
-    json_path = base + ".json"
+    # Generate paired markdown
+    paired_md = create_paired_markdown(bullet_points, supporting_text_list)
+
+    # Save outputs to output directory
+    pdf_name = os.path.basename(pdf_path)
+    base_name, _ = os.path.splitext(pdf_name)
+    txt_path = os.path.join(output_dir, base_name + ".txt")
+    json_path = os.path.join(output_dir, base_name + ".json")
+    md_path = os.path.join(output_dir, base_name + ".md")
 
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(linkedin_post)
@@ -208,6 +244,10 @@ def process_pdf(pdf_path: str):
     with open(json_path, "w", encoding="utf-8") as f:
         f.write(json_str)
     print(f"Saved: {json_path}")
+
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(paired_md)
+    print(f"Saved: {md_path}")
 
 
 # ==========================
@@ -224,13 +264,24 @@ if __name__ == "__main__":
         required=True,
         help="Path to a folder containing PDF files."
     )
+    parser.add_argument(
+        "--output",
+        "-o",
+        required=True,
+        help="Path to output folder for generated files."
+    )
 
     args = parser.parse_args()
 
     folder = args.input
+    output_dir = args.output
 
     if not os.path.isdir(folder):
         print(f"Error: {folder} is not a folder.")
+        sys.exit(1)
+
+    if not os.path.isdir(output_dir):
+        print(f"Error: {output_dir} is not a folder.")
         sys.exit(1)
 
     pdfs = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
@@ -243,10 +294,6 @@ if __name__ == "__main__":
 
     for pdf_name in pdfs:
         pdf_path = os.path.join(folder, pdf_name)
-        base, _ = os.path.splitext(pdf_path)
-        txt_path = base + ".txt"
-        json_path = base + ".json"
-
-        process_pdf(pdf_path)
+        process_pdf(pdf_path, output_dir)
 
     print("Done.")
