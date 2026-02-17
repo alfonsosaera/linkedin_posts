@@ -9,6 +9,7 @@ import csv
 import base64
 import shutil
 import argparse
+import locale
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ from checkers import (
 )
 
 load_dotenv()
+locale.setlocale(locale.LC_ALL, '')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -650,7 +652,7 @@ def generate_buffer_csv(input_dir: str):
         sys.exit(1)
 
     # Find all .txt files (LinkedIn posts), sorted case-insensitively
-    txt_files = sorted(input_path.glob("*.txt"), key=lambda f: f.name.lower())
+    txt_files = sorted(input_path.glob("*.txt"), key=lambda f: locale.strxfrm(f.name))
 
     if not txt_files:
         print("No .txt files found.")
@@ -667,7 +669,7 @@ def generate_buffer_csv(input_dir: str):
         writer.writerow(["Text", "Image URL", "Tags", "Posting Time"])
 
         for txt_file in txt_files:
-            post_content = txt_file.read_text(encoding="utf-8")
+            post_content = txt_file.read_text(encoding="utf-8") + '\n--------------------------\n'
 
             # Look for corresponding .images.json file
             image_url = ""
