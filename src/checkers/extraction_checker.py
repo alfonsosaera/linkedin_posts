@@ -58,6 +58,12 @@ class ExtractionChecker(BaseChecker):
         "data_access_explanation",
     ]
 
+    def _normalize_to_string(self, field_value: str | list) -> str:
+        """Convert list to newline-separated string if needed."""
+        if isinstance(field_value, list):
+            return "\n".join(field_value)
+        return field_value
+
     def run_rule_checks(self, output: dict) -> list[str]:
         """Check extraction output against rules."""
         failures = []
@@ -79,7 +85,7 @@ class ExtractionChecker(BaseChecker):
             )
 
         # 3. Validate bullet_points format
-        bullet_points = output["bullet_points"]
+        bullet_points = self._normalize_to_string(output["bullet_points"])
         bullet_matches = re.findall(r"5\.\d{3}\.", bullet_points)
         if len(bullet_matches) < 3:
             failures.append(
@@ -88,7 +94,7 @@ class ExtractionChecker(BaseChecker):
             )
 
         # 4. Validate supporting_text_list matches bullet count
-        supporting_text = output["supporting_text_list"]
+        supporting_text = self._normalize_to_string(output["supporting_text_list"])
         support_matches = re.findall(r"5\.\d{3}\.", supporting_text)
         if len(support_matches) != len(bullet_matches):
             failures.append(
