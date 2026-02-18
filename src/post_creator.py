@@ -543,8 +543,6 @@ def process_pdf(pdf_path: str, upload_images: bool = True):
         pdf_path: Path to the PDF file
         upload_images: If True, upload extracted images to Imgur
     """
-    print(f"\n=== Processing PDF: {pdf_path} ===")
-
     # Initialize checkers
     extraction_checker = ExtractionChecker(max_retries=3, min_quality_score=0.7)
     linkedin_checker = LinkedInChecker(max_retries=3, min_quality_score=0.75)
@@ -703,29 +701,50 @@ def generate_buffer_csv(input_dir: str):
 # ==========================
 # CLI HELPER
 # ==========================
-def run_generate(folder: str, upload_images: bool = True):
+def is_pdf_processed(pdf_path: str) -> bool:
+    """Check if a PDF has already been fully processed."""
+    base, _ = os.path.splitext(pdf_path)
+    required = [base + ext for ext in (".txt", ".json", ".md", "_checker_report.json")]
+    return all(os.path.exists(f) for f in required)
+
+
+def run_generate(folder: str, upload_images: bool = True, force: bool = False):
     """Process all PDFs in a folder.
 
     Args:
         folder: Path to folder containing PDF files
         upload_images: If True, upload extracted images to Imgur
+        force: If True, reprocess PDFs even if output files exist
     """
     if not os.path.isdir(folder):
         print(f"Error: {folder} is not a folder.")
         sys.exit(1)
 
-    pdfs = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
+    all_pdfs = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
 
-    if not pdfs:
+    if not all_pdfs:
         print("No PDF files found.")
         sys.exit(0)
 
-    print(f"Found {len(pdfs)} PDF(s).")
+    if force:
+        pdfs = all_pdfs
+    else:
+        pdfs = [f for f in all_pdfs if not is_pdf_processed(os.path.join(folder, f))]
+        skipped = len(all_pdfs) - len(pdfs)
+        if skipped:
+            print(f"Skipping {skipped} already-processed PDF(s). Use --force to reprocess.")
+
+    if not pdfs:
+        print("All PDFs already processed.")
+        return
+
+    print(f"Found {len(pdfs)} PDF(s) to process.")
     if not upload_images:
         print("Imgur upload disabled (images will be extracted locally).")
 
-    for pdf_name in pdfs:
+    for i, pdf_name in enumerate(pdfs, 1):
         pdf_path = os.path.join(folder, pdf_name)
+        print(f"\n=== Processing PDF {i}/{len(pdfs)}: {pdf_name} ===")
         process_pdf(pdf_path, upload_images=upload_images)
 
     print("Done generating posts.")
@@ -755,6 +774,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip Imgur upload (images are still extracted locally)."
     )
+    generate_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess all PDFs even if output files already exist."
+    )
 
     # Step 2: Create Buffer CSV from posts
     csv_parser = subparsers.add_parser(
@@ -782,17 +806,22 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip Imgur upload (images are still extracted locally)."
     )
+    all_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess all PDFs even if output files already exist."
+    )
 
     args = parser.parse_args()
 
     if args.command == "generate":
-        run_generate(args.input, upload_images=not args.no_upload)
+        run_generate(args.input, upload_images=not args.no_upload, force=args.force)
 
     elif args.command == "csv":
         generate_buffer_csv(args.input)
 
     elif args.command == "all":
-        run_generate(args.input, upload_images=not args.no_upload)
+        run_generate(args.input, upload_images=not args.no_upload, force=args.force)
         print("\n" + "=" * 50)
         print("Creating Buffer CSV...")
         print("=" * 50)
