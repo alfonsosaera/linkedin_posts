@@ -576,6 +576,12 @@ def process_pdf(pdf_path: str, upload_images: bool = True):
     objective_sentence = parsed.get("objective_sentence", "")
     bullet_points = parsed.get("bullet_points", "")
     supporting_text_list = parsed.get("supporting_text_list", "")
+
+    # Normalize list values to newline-separated strings (LLM sometimes returns arrays)
+    if isinstance(bullet_points, list):
+        bullet_points = "\n".join(bullet_points)
+    if isinstance(supporting_text_list, list):
+        supporting_text_list = "\n".join(supporting_text_list)
     links_block = parsed.get("links_block", "")
 
     # Process images: extract, upload to Imgur, select best
