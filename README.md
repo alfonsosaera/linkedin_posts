@@ -63,6 +63,31 @@ uv run python src/post_creator.py generate --input input/
 uv run python src/post_creator.py csv --input input/
 ```
 
+### Override Journal and Paper URL (Alternative Sources)
+
+When a PDF is downloaded from an alternative source (e.g., bioRxiv) instead of the official journal, create an optional sidecar JSON file to provide the correct journal name and paper URL:
+
+**File: `{filename}.meta.json`** (next to the PDF)
+
+```json
+{
+  "journal": "Nature Methods",
+  "paper_url": "https://doi.org/10.1038/s41592-025-02706-x"
+}
+```
+
+Both fields are optional. If the sidecar file exists, those values override what the LLM extracts from the PDF text. The sidecar file is entirely optional—if it doesn't exist, the LLM extracts journal and URL directly from the PDF.
+
+Example:
+```
+input/
+  ├── paper.pdf
+  ├── paper.meta.json        # Created by you (optional)
+  ├── paper.txt              # Generated output
+  ├── paper.json             # Generated output
+  └── ...
+```
+
 ## Output Files
 
 For each processed PDF, the following files are generated:

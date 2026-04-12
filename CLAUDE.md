@@ -62,6 +62,7 @@ Extract Images (PyMuPDF) → Upload Imgur → Select Best (GPT-4o) → images.js
 
 **Stage 1 - Extraction** (`llm_extract` using `gpt-5.1`):
 - Loads PDF via `PyPDFLoader`
+- **Loads optional sidecar metadata** (`{filename}.meta.json`) to override journal/URL for alternative sources
 - Extracts structured data: authors, title, journal, bullet points, links
 - Returns JSON with `response_format: json_object`
 - **Validated by `ExtractionChecker`** before proceeding
@@ -206,12 +207,14 @@ If `overall_score` falls below the threshold, the check fails and triggers a ret
 
 **Step 1: Generate posts** (`generate` command)
 1. Place PDF files in `input/` directory
-2. Run: `uv run python src/post_creator.py generate --input input/`
-3. For each PDF:
-   - **Extract**: invoke `llm_extract` -> validate with `ExtractionChecker` -> retry if needed
+2. (Optional) Create `{filename}.meta.json` sidecar files for PDFs from alternative sources with correct `journal` and/or `paper_url` fields
+3. Run: `uv run python src/post_creator.py generate --input input/`
+4. For each PDF:
+   - **Check for metadata overrides**: look for `{filename}.meta.json` sidecar
+   - **Extract**: invoke `llm_extract` with sidecar metadata injected into prompt -> validate with `ExtractionChecker` -> retry if needed
    - **Images**: extract from PDF -> upload to Imgur -> select best with GPT-4o
    - **Generate**: invoke `llm_linkedin` -> validate with `LinkedInChecker` -> retry if needed
-4. Generates files next to the original PDF:
+5. Generates files next to the original PDF:
    - `{filename}.json` - extracted structured data
    - `{filename}.txt` - final LinkedIn post
    - `{filename}.md` - bullet points paired with supporting text
@@ -244,6 +247,45 @@ If `overall_score` falls below the threshold, the check fails and triggers a ret
 | `process_images()` | `post_creator.py` | Orchestrate image extraction pipeline |
 | `generate_buffer_csv()` | `post_creator.py` | Create Buffer CSV from .txt posts |
 | `run_generate()` | `post_creator.py` | Process all PDFs in a folder |
+
+## Sidecar Metadata for Alternative Sources
+
+When a PDF is downloaded from an alternative source (e.g., bioRxiv, arXiv) instead of the official journal, the journal name and paper URL extracted by the LLM may be incorrect. The sidecar metadata feature allows you to override these values.
+
+### Format
+
+Create a `{filename}.meta.json` file next to the PDF:
+
+```json
+{
+  "journal": "Nature Methods",
+  "paper_url": "https://doi.org/10.1038/s41592-025-02706-x"
+}
+```
+
+Both fields are optional. Only include the fields you need to override.
+
+### Implementation Details
+
+**In `process_pdf()` (`src/post_creator.py` lines 556–572):**
+- Checks for `{base}.meta.json` next to the PDF using `os.path.exists()`
+- If found, parses JSON and extracts `journal` and `paper_url` fields
+- Builds an override instruction string: `"IMPORTANT: Use the following verified metadata instead of extracting it from the paper text:\n- Publication journal: X\n- Paper URL: Y\n\n"`
+- Passes the override string as `metadata_overrides` variable to the extraction prompt
+
+**In the extraction prompt (`EXTRACT_PROMPT_TEMPLATE_STR` line 60):**
+- Placeholder `{metadata_overrides}` is at the very top of the prompt
+- When empty (no sidecar), it's a blank string and behavior is identical to before
+- When present, the LLM sees the override instruction first and uses those values instead of extracting from PDF text
+
+**In the retry mechanism (`checkers/base.py` line 142):**
+- On retry, `metadata_overrides` is automatically included via `initial_inputs.copy()`, so the override persists across retries
+
+### Testing the Feature
+
+1. **Without sidecar** (normal case): Process a PDF → journal/URL extracted from PDF text
+2. **With sidecar**: Create `.meta.json` next to PDF → verify `objective_sentence` and `links_block` use the overridden values
+3. **Partial sidecar**: Include only `journal` or only `paper_url` → the other field is still extracted from PDF
 
 ## Tech Stack
 

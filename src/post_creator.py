@@ -57,7 +57,7 @@ llm_linkedin = ChatOpenAI(
 # PROMPT 1 — EXTRACT INFO FROM PAPER
 # ==========================
 EXTRACT_PROMPT_TEMPLATE_STR = """
-With the full content of the paper do the following tasks.
+{metadata_overrides}With the full content of the paper do the following tasks.
 
 1.- Extract publication full author list of the scientific publication. 
 Example:
@@ -552,6 +552,25 @@ def process_pdf(pdf_path: str, upload_images: bool = True):
     docs = loader.load()
     paper_text = "\n".join(d.page_content for d in docs)
 
+    # Load optional sidecar metadata (e.g., correct journal/URL when PDF is from an alternative source)
+    base_path = os.path.splitext(pdf_path)[0]
+    meta_path = base_path + ".meta.json"
+    metadata_overrides = ""
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            meta = json.load(f)
+        override_lines = []
+        if meta.get("journal"):
+            override_lines.append(f"- Publication journal: {meta['journal']}")
+        if meta.get("paper_url"):
+            override_lines.append(f"- Paper URL: {meta['paper_url']}")
+        if override_lines:
+            metadata_overrides = (
+                "IMPORTANT: Use the following verified metadata instead of extracting "
+                "it from the paper text:\n" + "\n".join(override_lines) + "\n\n"
+            )
+            print(f"Loaded metadata overrides from {meta_path}: {override_lines}")
+
     # Stage 1: Extract with validation
     print("\n===== EXTRACTION STAGE =====")
     extract_prompt = PromptTemplate.from_template(EXTRACT_PROMPT_TEMPLATE_STR)
@@ -559,7 +578,7 @@ def process_pdf(pdf_path: str, upload_images: bool = True):
 
     parsed, extract_checks = generate_with_retry(
         chain=extract_chain,
-        initial_inputs={"paper_text": paper_text},
+        initial_inputs={"paper_text": paper_text, "metadata_overrides": metadata_overrides},
         checker=extraction_checker,
         retry_prompt_template=EXTRACTION_RETRY_TEMPLATE,
         original_prompt_str=EXTRACT_PROMPT_TEMPLATE_STR,
