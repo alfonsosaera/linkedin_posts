@@ -15,6 +15,9 @@ wheels/
 # Input PDFs and generated files
 /input/
 
+# Cron job configuration (contains credentials and local paths)
+cron/jobs.json
+
 # Claude Code
 .claude/
 prompt.md
