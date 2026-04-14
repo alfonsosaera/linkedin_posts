@@ -756,7 +756,7 @@ def generate_buffer_csv(input_dir: str, start_date: datetime.date, schedule_path
                     selected_idx = img_data.get("selected_index")
                     if selected_idx is not None and img_data.get("images"):
                         selected_img = img_data["images"][selected_idx]
-                        image_url = selected_img.get("url", "")
+                        image_url = selected_img.get("url") or ""
                 except (json.JSONDecodeError, IndexError, KeyError) as e:
                     logging.warning(f"Error reading {images_json_path}: {e}")
 
