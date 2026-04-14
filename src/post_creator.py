@@ -11,6 +11,7 @@ import shutil
 import argparse
 import locale
 import logging
+import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -664,15 +665,66 @@ def process_pdf(pdf_path: str, upload_images: bool = True):
 
 
 # ==========================
+# SCHEDULING HELPERS
+# ==========================
+_WEEKDAY_NAMES = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+
+
+def load_posting_schedule(path: str) -> dict[int, str]:
+    """Read posting_schedule.csv and return {weekday_index: 'HH:MM'}.
+
+    Weekday indices follow datetime.date.weekday(): Mon=0 … Sun=6.
+    Raises ValueError if the file is missing/unreadable or has no valid rows.
+    """
+    schedule: dict[int, str] = {}
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                name = row.get("weekday", "").strip().lower()
+                time = row.get("time", "").strip()
+                if name in _WEEKDAY_NAMES and time:
+                    schedule[_WEEKDAY_NAMES[name]] = time
+    except FileNotFoundError:
+        raise ValueError(f"Schedule file not found: {path}")
+
+    if not schedule:
+        raise ValueError(f"No valid weekday/time rows found in {path}")
+    return schedule
+
+
+def iter_posting_datetimes(
+    start_date: datetime.date, schedule: dict[int, str]
+):
+    """Yield 'YYYY-MM-DD HH:MM' strings starting at start_date.
+
+    Advances one calendar day at a time, skipping days whose weekday is
+    not present in the schedule dict.
+    """
+    current = start_date
+    while True:
+        time_str = schedule.get(current.weekday())
+        if time_str is not None:
+            yield f"{current.isoformat()} {time_str}"
+        current += datetime.timedelta(days=1)
+
+
+# ==========================
 # GENERATE BUFFER CSV
 # ==========================
-def generate_buffer_csv(input_dir: str):
+def generate_buffer_csv(input_dir: str, start_date: datetime.date, schedule_path: str):
     """Generate Buffer-compatible CSV from LinkedIn post .txt files."""
     input_path = Path(input_dir)
 
     if not input_path.is_dir():
         print(f"Error: {input_dir} is not a directory.")
         sys.exit(1)
+
+    # Load posting schedule
+    schedule = load_posting_schedule(schedule_path)
+    slots = iter_posting_datetimes(start_date, schedule)
 
     # Find all .txt files (LinkedIn posts), sorted case-insensitively
     txt_files = sorted(input_path.glob("*.txt"), key=lambda f: locale.strxfrm(f.name))
@@ -708,11 +760,12 @@ def generate_buffer_csv(input_dir: str):
                 except (json.JSONDecodeError, IndexError, KeyError) as e:
                     logging.warning(f"Error reading {images_json_path}: {e}")
 
-            writer.writerow([post_content, image_url, "", ""])
+            posting_time = next(slots)
+            writer.writerow([post_content, image_url, "", posting_time])
             if image_url:
-                print(f"  Added: {txt_file.name} (with image)")
+                print(f"  Added: {txt_file.name} (with image) -> {posting_time}")
             else:
-                print(f"  Added: {txt_file.name}")
+                print(f"  Added: {txt_file.name} -> {posting_time}")
 
     print(f"\nSaved: {output_path}")
 
@@ -809,6 +862,19 @@ if __name__ == "__main__":
         required=True,
         help="Path to a folder containing .txt LinkedIn posts."
     )
+    csv_parser.add_argument(
+        "--start-date",
+        required=True,
+        type=datetime.date.fromisoformat,
+        metavar="YYYY-MM-DD",
+        help="First date to start scheduling posts (e.g. 2026-04-15)."
+    )
+    csv_parser.add_argument(
+        "--schedule",
+        default=str(Path(__file__).parent.parent / "templates" / "posting_schedule.csv"),
+        metavar="PATH",
+        help="Path to posting_schedule.csv (default: templates/posting_schedule.csv)."
+    )
 
     # Full workflow: generate + csv
     all_parser = subparsers.add_parser(
@@ -830,6 +896,19 @@ if __name__ == "__main__":
         action="store_true",
         help="Reprocess all PDFs even if output files already exist."
     )
+    all_parser.add_argument(
+        "--start-date",
+        required=True,
+        type=datetime.date.fromisoformat,
+        metavar="YYYY-MM-DD",
+        help="First date to start scheduling posts (e.g. 2026-04-15)."
+    )
+    all_parser.add_argument(
+        "--schedule",
+        default=str(Path(__file__).parent.parent / "templates" / "posting_schedule.csv"),
+        metavar="PATH",
+        help="Path to posting_schedule.csv (default: templates/posting_schedule.csv)."
+    )
 
     args = parser.parse_args()
 
@@ -837,11 +916,11 @@ if __name__ == "__main__":
         run_generate(args.input, upload_images=not args.no_upload, force=args.force)
 
     elif args.command == "csv":
-        generate_buffer_csv(args.input)
+        generate_buffer_csv(args.input, args.start_date, args.schedule)
 
     elif args.command == "all":
         run_generate(args.input, upload_images=not args.no_upload, force=args.force)
         print("\n" + "=" * 50)
         print("Creating Buffer CSV...")
         print("=" * 50)
-        generate_buffer_csv(args.input)
+        generate_buffer_csv(args.input, args.start_date, args.schedule)

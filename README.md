@@ -11,6 +11,7 @@ Generate LinkedIn posts from scientific paper PDFs using a two-stage LLM pipelin
 - **Imgur Upload**: Automatically upload images for use in Buffer
 - **Buffer CSV Export**: Generate ready-to-upload CSV for Buffer bulk scheduling
 - **Validation System**: LLM-based checkers ensure quality output with automatic retry
+- **Scheduled Posting**: Assign publication times to each post based on a configurable weekly schedule
 
 ## Installation
 
@@ -37,20 +38,20 @@ Get your Imgur Client-ID at: https://api.imgur.com/oauth2/addclient
 
 ## Usage
 
-### Full Workflow (Recommended)
+### Full Workflow
 
-Process PDFs and generate Buffer CSV in one command:
+Process PDFs and generate Buffer CSV with scheduled posting times:
 
 ```bash
-uv run python src/post_creator.py all --input input/
+uv run python src/post_creator.py all --input input/ --start-date 2026-04-15
 ```
 
-### Skip Imgur Upload
+### Skip Imgur Upload (Recommended)
 
 Extract images locally without uploading to Imgur:
 
 ```bash
-uv run python src/post_creator.py all --input input/ --no-upload
+uv run python src/post_creator.py all --input input/ --no-upload --start-date 2026-04-15
 ```
 
 ### Run Steps Independently
@@ -59,8 +60,8 @@ uv run python src/post_creator.py all --input input/ --no-upload
 # Step 1: Generate LinkedIn posts from PDFs
 uv run python src/post_creator.py generate --input input/
 
-# Step 2: Create Buffer CSV for bulk upload
-uv run python src/post_creator.py csv --input input/
+# Step 2: Create Buffer CSV for bulk upload (with posting schedule)
+uv run python src/post_creator.py csv --input input/ --start-date 2026-04-15
 ```
 
 ### Override Journal and Paper URL (Alternative Sources)
@@ -88,6 +89,26 @@ input/
   └── ...
 ```
 
+## Scheduling Configuration
+
+Posts are assigned publication times based on `templates/posting_schedule.csv`. Edit this file to customize the schedule:
+
+```csv
+weekday,time
+Sunday,20:53
+Monday,17:21
+Tuesday,15:47
+Wednesday,16:22
+Thursday,16:30
+Friday,15:11
+Saturday,09:21
+```
+
+- Each post gets the next available weekday slot from the schedule
+- Weekdays not defined in the schedule are automatically skipped
+- Times are in HH:MM 24-hour format
+- Use a custom schedule with `--schedule /path/to/custom_schedule.csv`
+
 ## Output Files
 
 For each processed PDF, the following files are generated:
@@ -101,5 +122,5 @@ For each processed PDF, the following files are generated:
 | `{name}_selected.png` | Best selected image |
 | `{name}.images.json` | Image metadata with URLs |
 | `{name}_checker_report.json` | Validation results |
-| `000_buffer_upload.csv` | Buffer-ready CSV (in input folder) |
+| `000_buffer_upload.csv` | Buffer-ready CSV with posting times (in input folder) |
 

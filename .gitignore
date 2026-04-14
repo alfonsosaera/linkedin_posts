@@ -16,6 +16,7 @@ wheels/
 /input/
 
 # Cron job configuration (contains credentials and local paths)
+cron/
 cron/jobs.json
 
 # Claude Code

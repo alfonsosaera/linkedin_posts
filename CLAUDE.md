@@ -19,7 +19,8 @@ linkedin_posts/
 │       └── linkedin_checker.py
 ├── input/                   # Place PDFs here to process
 ├── templates/
-│   └── Buffer_LinkedIn_Template.csv
+│   ├── Buffer_LinkedIn_Template.csv
+│   └── posting_schedule.csv
 ├── .env
 ├── pyproject.toml
 ├── CLAUDE.md
@@ -33,17 +34,17 @@ linkedin_posts/
 uv sync
 
 # Full workflow (generate + csv in one command)
-uv run python src/post_creator.py all --input input/
+uv run python src/post_creator.py all --input input/ --start-date 2026-04-15
 
 # Skip Imgur upload (images still extracted locally)
-uv run python src/post_creator.py all --input input/ --no-upload
+uv run python src/post_creator.py all --input input/ --no-upload --start-date 2026-04-15
 
 # Or run steps independently:
 # Step 1: Generate LinkedIn posts from PDFs
 uv run python src/post_creator.py generate --input input/
 
 # Step 2: Create Buffer CSV for bulk upload
-uv run python src/post_creator.py csv --input input/
+uv run python src/post_creator.py csv --input input/ --start-date 2026-04-15
 ```
 
 ## Architecture
@@ -224,12 +225,13 @@ If `overall_score` falls below the threshold, the check fails and triggers a ret
    - `{filename}_checker_report.json` - validation results for both stages
 
 **Step 2: Create Buffer CSV** (`csv` command)
-1. Run: `uv run python src/post_creator.py csv --input input/`
+1. Run: `uv run python src/post_creator.py csv --input input/ --start-date YYYY-MM-DD`
 2. Scans directory for all `.txt` files (LinkedIn posts)
 3. Looks for corresponding `.images.json` to get selected image URL
-4. Generates `000_buffer_upload.csv` in the input directory (numeric prefix sorts to top)
-5. CSV columns: `Text`, `Image URL`, `Tags`, `Posting Time`
-6. Posts are ordered alphabetically (case-insensitive), matching folder listing order
+4. Loads `templates/posting_schedule.csv` (or custom `--schedule` path) to assign a `Posting Time` to each post
+5. Generates `000_buffer_upload.csv` in the input directory (numeric prefix sorts to top)
+6. CSV columns: `Text`, `Image URL`, `Tags`, `Posting Time`
+7. Posts are ordered alphabetically (case-insensitive); each gets the next available slot from the schedule (weekdays not in the schedule CSV are skipped)
 
 ## Key Functions
 
