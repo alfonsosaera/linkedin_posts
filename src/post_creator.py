@@ -810,7 +810,7 @@ def upload_to_buffer(input_dir: str, start_date: datetime.date, schedule_path: s
         variables = {
             "channelId": channel_id,
             "text": body,
-            "url": paper_url or "",
+            "url": image_url or paper_url or "",
             "firstComment": first_comment,
             "dueAt": scheduled_at_iso,
         }
