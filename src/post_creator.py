@@ -671,13 +671,15 @@ BUFFER_API_URL = "https://api.buffer.com"
 
 CREATE_LINKEDIN_POST = """
 mutation CreateLinkedInPost(
-  $channelId: ID!, $body: String!, $url: String!,
-  $firstComment: String!, $scheduledAt: DateTime
+  $channelId: ChannelId!, $text: String!, $url: String!,
+  $firstComment: String!, $dueAt: DateTime
 ) {
   createPost(input: {
     channelId: $channelId
-    body: $body
-    scheduledAt: $scheduledAt
+    text: $text
+    dueAt: $dueAt
+    schedulingType: automatic
+    mode: customScheduled
     metadata: {
       linkedin: {
         firstComment: $firstComment
@@ -685,22 +687,16 @@ mutation CreateLinkedInPost(
       }
     }
   }) {
-    post { id status scheduledAt }
-  }
-}
-"""
-
-QUERY_ORGANIZATIONS = """
-query GetOrganizations {
-  account {
-    organizations { id name }
+    ... on PostActionSuccess {
+      post { id status }
+    }
   }
 }
 """
 
 QUERY_CHANNELS = """
-query GetChannels($orgId: ID!) {
-  organization(id: $orgId) {
+query GetChannels {
+  account {
     channels { id name service }
   }
 }
@@ -734,20 +730,12 @@ def run_buffer_query(query: str, variables: dict | None = None) -> dict:
 
 def get_linkedin_channel_id() -> str:
     """Discover the first LinkedIn channel ID from the Buffer account."""
-    orgs_data = run_buffer_query(QUERY_ORGANIZATIONS)
-    orgs = orgs_data.get("account", {}).get("organizations", [])
-    if not orgs:
-        raise RuntimeError("No organizations found in Buffer account")
-
-    org_id = orgs[0]["id"]
-    channels_data = run_buffer_query(QUERY_CHANNELS, {"orgId": org_id})
-    channels = channels_data.get("organization", {}).get("channels", [])
+    data = run_buffer_query(QUERY_CHANNELS)
+    channels = data.get("account", {}).get("channels", [])
 
     linkedin_channels = [ch for ch in channels if ch.get("service") == "linkedin"]
     if not linkedin_channels:
-        raise RuntimeError(
-            f"No LinkedIn channels found in organization '{orgs[0]['name']}'"
-        )
+        raise RuntimeError("No LinkedIn channels found in Buffer account")
 
     return linkedin_channels[0]["id"]
 
@@ -822,10 +810,10 @@ def upload_to_buffer(input_dir: str, start_date: datetime.date, schedule_path: s
 
         variables = {
             "channelId": channel_id,
-            "body": body,
+            "text": body,
             "url": paper_url or "",
             "firstComment": first_comment,
-            "scheduledAt": scheduled_at_iso,
+            "dueAt": scheduled_at_iso,
         }
 
         try:
