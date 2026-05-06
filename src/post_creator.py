@@ -692,6 +692,33 @@ mutation CreateLinkedInPost(
 }
 """
 
+CREATE_LINKEDIN_POST_WITH_IMAGE = """
+mutation CreateLinkedInPostWithImage(
+  $channelId: ChannelId!, $text: String!, $imageUrl: String!,
+  $firstComment: String!, $dueAt: DateTime
+) {
+  createPost(input: {
+    channelId: $channelId
+    text: $text
+    dueAt: $dueAt
+    schedulingType: automatic
+    mode: customScheduled
+    assets: {
+      images: [{ url: $imageUrl }]
+    }
+    metadata: {
+      linkedin: {
+        firstComment: $firstComment
+      }
+    }
+  }) {
+    ... on PostActionSuccess {
+      post { id status }
+    }
+  }
+}
+"""
+
 QUERY_CHANNELS = """
 query GetChannels {
   account {
@@ -807,16 +834,27 @@ def upload_to_buffer(input_dir: str, start_date: datetime.date, schedule_path: s
             except (json.JSONDecodeError, IndexError, KeyError) as e:
                 logging.warning(f"Error reading {images_json_path}: {e}")
 
-        variables = {
-            "channelId": channel_id,
-            "text": body,
-            "url": image_url or paper_url or "",
-            "firstComment": first_comment,
-            "dueAt": scheduled_at_iso,
-        }
+        if image_url:
+            variables = {
+                "channelId": channel_id,
+                "text": body,
+                "imageUrl": image_url,
+                "firstComment": first_comment,
+                "dueAt": scheduled_at_iso,
+            }
+            query = CREATE_LINKEDIN_POST_WITH_IMAGE
+        else:
+            variables = {
+                "channelId": channel_id,
+                "text": body,
+                "url": paper_url or "",
+                "firstComment": first_comment,
+                "dueAt": scheduled_at_iso,
+            }
+            query = CREATE_LINKEDIN_POST
 
         try:
-            result = run_buffer_query(CREATE_LINKEDIN_POST, variables)
+            result = run_buffer_query(query, variables)
             post_id = result.get("createPost", {}).get("post", {}).get("id", "?")
             print(
                 f"✓ {txt_file.name}"
