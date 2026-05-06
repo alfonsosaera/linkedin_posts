@@ -342,31 +342,29 @@ def extract_images_from_pdf(pdf_path: str, min_size: int = 200) -> list[dict]:
     return images
 
 
-def upload_to_imgur(image_path: str) -> str | None:
-    """Upload image to Imgur anonymously, return URL.
+def upload_to_imgbb(image_path: str) -> str | None:
+    """Upload image to imgbb, return URL.
 
-    Requires IMGUR_CLIENT_ID in environment variables.
+    Requires IMGBB_API_KEY in environment variables.
     """
-    client_id = os.getenv("IMGUR_CLIENT_ID")
-    if not client_id:
-        logging.warning("IMGUR_CLIENT_ID not set, skipping upload")
+    api_key = os.getenv("IMGBB_API_KEY")
+    if not api_key:
+        logging.warning("IMGBB_API_KEY not set, skipping upload")
         return None
 
     with open(image_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
 
-    headers = {"Authorization": f"Client-ID {client_id}"}
     response = requests.post(
-        "https://api.imgur.com/3/image",
-        headers=headers,
-        data={"image": image_data, "type": "base64"},
+        "https://api.imgbb.com/1/upload",
+        data={"key": api_key, "image": image_data},
         timeout=30,
     )
 
     if response.status_code == 200:
-        return response.json()["data"]["link"]
+        return response.json()["data"]["url"]
     else:
-        logging.warning(f"Imgur upload failed: {response.status_code} - {response.text}")
+        logging.warning(f"imgbb upload failed: {response.status_code} - {response.text}")
         return None
 
 
@@ -479,12 +477,12 @@ def process_images(pdf_path: str, paper_context: str, upload: bool = True) -> di
         image_paths.append(img_path)
         print(f"  Saved: {img_path}")
 
-    # Upload to Imgur (if enabled)
+    # Upload to imgbb (if enabled)
     image_data = []
     if upload:
-        print("\nUploading to Imgur...")
+        print("\nUploading to imgbb...")
         for path in image_paths:
-            url = upload_to_imgur(path)
+            url = upload_to_imgbb(path)
             image_data.append({
                 "filename": os.path.basename(path),
                 "url": url,
@@ -494,7 +492,7 @@ def process_images(pdf_path: str, paper_context: str, upload: bool = True) -> di
             else:
                 print(f"  Failed: {os.path.basename(path)}")
     else:
-        print("\nSkipping Imgur upload.")
+        print("\nSkipping imgbb upload.")
         for path in image_paths:
             image_data.append({
                 "filename": os.path.basename(path),
@@ -979,7 +977,7 @@ def run_generate(folder: str, upload_images: bool = True, force: bool = False):
 
     print(f"Found {len(pdfs)} PDF(s) to process.")
     if not upload_images:
-        print("Imgur upload disabled (images will be extracted locally).")
+        print("imgbb upload disabled (images will be extracted locally).")
 
     for i, pdf_name in enumerate(pdfs, 1):
         pdf_path = os.path.join(folder, pdf_name)
@@ -1011,7 +1009,7 @@ if __name__ == "__main__":
     generate_parser.add_argument(
         "--no-upload",
         action="store_true",
-        help="Skip Imgur upload (images are still extracted locally)."
+        help="Skip imgbb upload (images are still extracted locally)."
     )
     generate_parser.add_argument(
         "--force",
@@ -1080,7 +1078,7 @@ if __name__ == "__main__":
     all_parser.add_argument(
         "--no-upload",
         action="store_true",
-        help="Skip Imgur upload (images are still extracted locally)."
+        help="Skip imgbb upload (images are still extracted locally)."
     )
     all_parser.add_argument(
         "--force",

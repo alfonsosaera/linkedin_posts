@@ -36,7 +36,7 @@ uv sync
 # Full workflow (generate + csv in one command)
 uv run python src/post_creator.py all --input input/ --start-date 2026-04-15
 
-# Skip Imgur upload (images still extracted locally)
+# Skip imgbb upload (images still extracted locally)
 uv run python src/post_creator.py all --input input/ --no-upload --start-date 2026-04-15
 
 # Or run steps independently:
@@ -54,7 +54,7 @@ The application uses a **two-chain LangChain pipeline with validation checkers a
 ```
 PDF → Extract Chain → [Extraction Checker] ←→ retry → JSON
  ↓                                                      ↓
-Extract Images (PyMuPDF) → Upload Imgur → Select Best (GPT-4o) → images.json
+Extract Images (PyMuPDF) → Upload imgbb → Select Best (GPT-4o) → images.json
                                                         ↓
                       LinkedIn Chain → [LinkedIn Checker] ←→ retry → Final Post
                                                         ↓
@@ -72,7 +72,7 @@ Extract Images (PyMuPDF) → Upload Imgur → Select Best (GPT-4o) → images.js
 - Extracts images from PDF using PyMuPDF
 - Filters small images (<200px) to exclude logos/icons
 - Saves images as `{filename}_1.png`, `{filename}_2.png`, etc.
-- Uploads all images to Imgur (anonymous, requires `IMGUR_CLIENT_ID`)
+- Uploads all images to imgbb (requires `IMGBB_API_KEY`)
 - Uses GPT-4o vision to select the most impactful figure
 - Saves metadata to `{filename}.images.json`
 
@@ -244,7 +244,7 @@ If `overall_score` falls below the threshold, the check fails and triggers a ret
 | `log_check_results()` | `post_creator.py` | Log checker results to console |
 | `generate_checker_report()` | `post_creator.py` | Create JSON report of all attempts |
 | `extract_images_from_pdf()` | `post_creator.py` | Extract images using PyMuPDF |
-| `upload_to_imgur()` | `post_creator.py` | Upload image to Imgur anonymously |
+| `upload_to_imgbb()` | `post_creator.py` | Upload image to imgbb |
 | `select_best_image()` | `post_creator.py` | Use GPT-4o to select best figure |
 | `process_images()` | `post_creator.py` | Orchestrate image extraction pipeline |
 | `generate_buffer_csv()` | `post_creator.py` | Create Buffer CSV from .txt posts |
@@ -296,7 +296,7 @@ Both fields are optional. Only include the fields you need to override.
 - LangChain + LangChain OpenAI for LLM interactions
 - pypdf for PDF parsing
 - PyMuPDF (fitz) for image extraction
-- requests for Imgur API
+- requests for API calls
 - python-dotenv for environment configuration
 
 ## Environment
@@ -305,8 +305,7 @@ Requires `.env` file with:
 
 ```
 OPENAI_API_KEY=your_openai_key
-IMGUR_CLIENT_ID=your_imgur_client_id
+IMGBB_API_KEY=your_imgbb_api_key
 ```
 
-Get Imgur Client-ID at: https://api.imgur.com/oauth2/addclient
-(Select "Anonymous usage without user authorization")
+Get imgbb API key at: https://api.imgbb.com/

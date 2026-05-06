@@ -8,7 +8,7 @@ Generate LinkedIn posts from scientific paper PDFs using a two-stage LLM pipelin
 - **LinkedIn Post Generation**: Create polished, professional posts with proper formatting
 - **Image Extraction**: Automatically extract figures from PDFs using PyMuPDF
 - **Smart Image Selection**: Use GPT-4o vision to select the most impactful figure
-- **Imgur Upload**: Automatically upload images for use in Buffer
+- **imgbb Upload**: Automatically upload images for use in Buffer
 - **Buffer CSV Export**: Generate ready-to-upload CSV for Buffer bulk scheduling
 - **Buffer API Integration**: Upload posts directly to Buffer with first comments for additional links
 - **Validation System**: LLM-based checkers ensure quality output with automatic retry
@@ -34,12 +34,12 @@ Create a `.env` file in the project root:
 
 ```env
 OPENAI_API_KEY=your_openai_api_key
-IMGUR_CLIENT_ID=your_imgur_client_id        # Optional, for image uploads
+IMGBB_API_KEY=your_imgbb_api_key             # Optional, for image uploads
 BUFFER_API_KEY=your_buffer_api_key           # Optional, for Buffer API uploads
 ```
 
 **Get Your Keys:**
-- **Imgur Client-ID**: https://api.imgur.com/oauth2/addclient (Select "Anonymous usage without user authorization")
+- **imgbb API Key**: https://api.imgbb.com/ (free tier includes API access)
 - **Buffer API Key**: Available in your Buffer account settings under "Integrations" → "API"
 
 ### Posting Schedule
@@ -124,7 +124,7 @@ uv run python src/post_creator.py buffer --input input/ --start-date 2026-05-14
 # Generate command
 uv run python src/post_creator.py generate \
   --input input/ \
-  [--no-upload]              # Skip Imgur upload, extract locally
+  [--no-upload]              # Skip imgbb upload, extract locally
   [--force]                  # Reprocess PDFs even if outputs exist
 
 # CSV command
@@ -290,7 +290,7 @@ For each processed PDF, the following files are generated in the input folder:
 | `{name}.md` | Bullet points with supporting text in Markdown format |
 | `{name}_1.png`, `{name}_2.png`, ... | Extracted figures from the PDF |
 | `{name}_selected.png` | Best selected image (as chosen by GPT-4o) |
-| `{name}.images.json` | Image metadata with Imgur URLs |
+| `{name}.images.json` | Image metadata with imgbb URLs |
 | `{name}_checker_report.json` | Validation results from checkers (extraction & LinkedIn quality checks) |
 | `000_buffer_upload.csv` | Buffer-ready CSV with posting times (in input folder) |
 
@@ -301,7 +301,7 @@ The application uses a **two-chain LangChain pipeline with validation checkers**
 ```
 PDF → Extract Chain → [Extraction Checker] ←→ retry → JSON
  ↓                                                      ↓
-Extract Images (PyMuPDF) → Upload Imgur → Select Best (GPT-4o) → images.json
+Extract Images (PyMuPDF) → Upload imgbb → Select Best (GPT-4o) → images.json
                                                         ↓
                       LinkedIn Chain → [LinkedIn Checker] ←→ retry → Final Post
                                                         ↓
@@ -318,9 +318,9 @@ Extract Images (PyMuPDF) → Upload Imgur → Select Best (GPT-4o) → images.js
 **Image Extraction**:
 - Extracts images from PDF using PyMuPDF
 - Filters small images (<200px) to exclude logos/icons
-- Uploads all images to Imgur (anonymous)
+- Uploads all images to imgbb
 - Uses GPT-4o vision to select the most impactful figure
-- Saves metadata with Imgur URLs to `.images.json`
+- Saves metadata with imgbb URLs to `.images.json`
 
 **Stage 2 - Post Generation** (uses `gpt-4-mini`):
 - Takes extracted JSON as input
@@ -434,10 +434,10 @@ If extraction fails repeatedly, check:
 - Some PDFs may have images embedded as objects (not standard images)
 - Use `--no-upload` to skip Imgur and inspect locally extracted images
 
-**Imgur upload fails:**
-- Verify IMGUR_CLIENT_ID is correct
+**imgbb upload fails:**
+- Verify IMGBB_API_KEY is correct
 - Check internet connection
-- Imgur anonymous API may have rate limits
+- imgbb API may have rate limits
 
 ### Quality Issues
 
