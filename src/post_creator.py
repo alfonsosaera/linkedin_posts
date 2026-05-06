@@ -793,7 +793,8 @@ def upload_to_buffer(input_dir: str, start_date: datetime.date, schedule_path: s
 
         posting_time_str = next(slots)
         dt = datetime.datetime.fromisoformat(posting_time_str.replace(" ", "T"))
-        scheduled_at_iso = dt.isoformat() + "Z"
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+        scheduled_at_iso = dt.replace(tzinfo=local_tz).isoformat()
 
         image_url = ""
         images_json_path = txt_file.with_suffix(".images.json")
