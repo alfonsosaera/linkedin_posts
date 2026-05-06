@@ -665,6 +665,184 @@ def process_pdf(pdf_path: str, upload_images: bool = True):
 
 
 # ==========================
+# BUFFER API
+# ==========================
+BUFFER_API_URL = "https://api.buffer.com"
+
+CREATE_LINKEDIN_POST = """
+mutation CreateLinkedInPost(
+  $channelId: ID!, $body: String!, $url: String!,
+  $firstComment: String!, $scheduledAt: DateTime
+) {
+  createPost(input: {
+    channelId: $channelId
+    body: $body
+    scheduledAt: $scheduledAt
+    metadata: {
+      linkedin: {
+        firstComment: $firstComment
+        linkAttachment: { url: $url }
+      }
+    }
+  }) {
+    post { id status scheduledAt }
+  }
+}
+"""
+
+QUERY_ORGANIZATIONS = """
+query GetOrganizations {
+  account {
+    organizations { id name }
+  }
+}
+"""
+
+QUERY_CHANNELS = """
+query GetChannels($orgId: ID!) {
+  organization(id: $orgId) {
+    channels { id name service }
+  }
+}
+"""
+
+
+def run_buffer_query(query: str, variables: dict | None = None) -> dict:
+    """Execute a GraphQL query against the Buffer API."""
+    api_key = os.environ.get("BUFFER_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "BUFFER_API_KEY not found in environment. "
+            "Please add it to your .env file."
+        )
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {"query": query, "variables": variables or {}}
+    resp = requests.post(BUFFER_API_URL, headers=headers, json=payload)
+    resp.raise_for_status()
+
+    data = resp.json()
+    if "errors" in data:
+        raise RuntimeError(f"Buffer API error: {data['errors']}")
+
+    return data.get("data", {})
+
+
+def get_linkedin_channel_id() -> str:
+    """Discover the first LinkedIn channel ID from the Buffer account."""
+    orgs_data = run_buffer_query(QUERY_ORGANIZATIONS)
+    orgs = orgs_data.get("account", {}).get("organizations", [])
+    if not orgs:
+        raise RuntimeError("No organizations found in Buffer account")
+
+    org_id = orgs[0]["id"]
+    channels_data = run_buffer_query(QUERY_CHANNELS, {"orgId": org_id})
+    channels = channels_data.get("organization", {}).get("channels", [])
+
+    linkedin_channels = [ch for ch in channels if ch.get("service") == "linkedin"]
+    if not linkedin_channels:
+        raise RuntimeError(
+            f"No LinkedIn channels found in organization '{orgs[0]['name']}'"
+        )
+
+    return linkedin_channels[0]["id"]
+
+
+def parse_post_for_buffer(text: str) -> tuple[str, str, str]:
+    """Split post into body and first comment, extract paper URL.
+
+    Returns: (body, first_comment, paper_url)
+    """
+    blog_marker = "👉 Follow my blog for more https://lovednacodeblog.com/"
+
+    if blog_marker not in text:
+        return text, "", ""
+
+    parts = text.split(blog_marker, 1)
+    body = (parts[0] + blog_marker).rstrip()
+    first_comment = parts[1].strip()
+
+    paper_url = ""
+    if first_comment:
+        match = re.search(r"https?://\S+", first_comment)
+        if match:
+            paper_url = match.group(0)
+
+    return body, first_comment, paper_url
+
+
+def upload_to_buffer(input_dir: str, start_date: datetime.date, schedule_path: str):
+    """Upload LinkedIn posts directly to Buffer via GraphQL API."""
+    input_path = Path(input_dir)
+
+    if not input_path.is_dir():
+        print(f"Error: {input_dir} is not a directory.")
+        sys.exit(1)
+
+    print("Discovering LinkedIn channel in Buffer...")
+    channel_id = get_linkedin_channel_id()
+    print(f"Using channel ID: {channel_id}")
+
+    schedule = load_posting_schedule(schedule_path)
+    slots = iter_posting_datetimes(start_date, schedule)
+
+    txt_files = sorted(input_path.glob("*.txt"), key=lambda f: locale.strxfrm(f.name))
+
+    if not txt_files:
+        print("No .txt files found.")
+        sys.exit(0)
+
+    print(f"Found {len(txt_files)} LinkedIn post(s).")
+    print()
+
+    for txt_file in txt_files:
+        post_text = txt_file.read_text(encoding="utf-8")
+        body, first_comment, paper_url = parse_post_for_buffer(post_text)
+
+        posting_time_str = next(slots)
+        dt = datetime.datetime.fromisoformat(posting_time_str.replace(" ", "T"))
+        scheduled_at_iso = dt.isoformat() + "Z"
+
+        image_url = ""
+        images_json_path = txt_file.with_suffix(".images.json")
+        if images_json_path.exists():
+            try:
+                with open(images_json_path, "r", encoding="utf-8") as f:
+                    img_data = json.load(f)
+                selected_idx = img_data.get("selected_index")
+                if selected_idx is not None and img_data.get("images"):
+                    selected_img = img_data["images"][selected_idx]
+                    image_url = selected_img.get("url") or ""
+            except (json.JSONDecodeError, IndexError, KeyError) as e:
+                logging.warning(f"Error reading {images_json_path}: {e}")
+
+        variables = {
+            "channelId": channel_id,
+            "body": body,
+            "url": paper_url or "",
+            "firstComment": first_comment,
+            "scheduledAt": scheduled_at_iso,
+        }
+
+        try:
+            result = run_buffer_query(CREATE_LINKEDIN_POST, variables)
+            post_id = result.get("createPost", {}).get("post", {}).get("id", "?")
+            print(
+                f"✓ {txt_file.name}"
+                f" → scheduled for {posting_time_str}"
+                f" (ID: {post_id})"
+            )
+        except Exception as e:
+            print(f"✗ {txt_file.name} → ERROR: {e}")
+
+    print("\nDone uploading to Buffer.")
+
+
+# ==========================
 # SCHEDULING HELPERS
 # ==========================
 _WEEKDAY_NAMES = {
@@ -876,7 +1054,31 @@ if __name__ == "__main__":
         help="Path to posting_schedule.csv (default: templates/posting_schedule.csv)."
     )
 
-    # Full workflow: generate + csv
+    # Step 2b: Upload posts directly to Buffer via API
+    buffer_parser = subparsers.add_parser(
+        "buffer",
+        help="Upload LinkedIn posts directly to Buffer via GraphQL API"
+    )
+    buffer_parser.add_argument(
+        "--input", "-i",
+        required=True,
+        help="Path to a folder containing .txt LinkedIn posts."
+    )
+    buffer_parser.add_argument(
+        "--start-date",
+        required=True,
+        type=datetime.date.fromisoformat,
+        metavar="YYYY-MM-DD",
+        help="First date to start scheduling posts (e.g. 2026-04-15)."
+    )
+    buffer_parser.add_argument(
+        "--schedule",
+        default=str(Path(__file__).parent.parent / "templates" / "posting_schedule.csv"),
+        metavar="PATH",
+        help="Path to posting_schedule.csv (default: templates/posting_schedule.csv)."
+    )
+
+    # Full workflow: generate + csv (+ buffer optional)
     all_parser = subparsers.add_parser(
         "all",
         help="Run full workflow: generate posts from PDFs, then create Buffer CSV"
@@ -909,6 +1111,11 @@ if __name__ == "__main__":
         metavar="PATH",
         help="Path to posting_schedule.csv (default: templates/posting_schedule.csv)."
     )
+    all_parser.add_argument(
+        "--buffer",
+        action="store_true",
+        help="After CSV generation, upload posts directly to Buffer via API."
+    )
 
     args = parser.parse_args()
 
@@ -918,9 +1125,18 @@ if __name__ == "__main__":
     elif args.command == "csv":
         generate_buffer_csv(args.input, args.start_date, args.schedule)
 
+    elif args.command == "buffer":
+        upload_to_buffer(args.input, args.start_date, args.schedule)
+
     elif args.command == "all":
         run_generate(args.input, upload_images=not args.no_upload, force=args.force)
         print("\n" + "=" * 50)
         print("Creating Buffer CSV...")
         print("=" * 50)
         generate_buffer_csv(args.input, args.start_date, args.schedule)
+
+        if args.buffer:
+            print("\n" + "=" * 50)
+            print("Uploading to Buffer...")
+            print("=" * 50)
+            upload_to_buffer(args.input, args.start_date, args.schedule)
