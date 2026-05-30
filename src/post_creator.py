@@ -703,9 +703,9 @@ mutation CreateLinkedInPostWithImage(
     dueAt: $dueAt
     schedulingType: automatic
     mode: customScheduled
-    assets: {
-      images: [{ url: $imageUrl }]
-    }
+    assets: [
+      { image: { url: $imageUrl } }
+    ]
     metadata: {
       linkedin: {
         firstComment: $firstComment
