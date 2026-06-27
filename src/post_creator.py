@@ -761,7 +761,7 @@ def get_linkedin_channel_id() -> str:
     """
     channel_id = os.environ.get("BUFFER_CHANNEL_ID")
     if channel_id:
-        logger.info(f"Using BUFFER_CHANNEL_ID from env: {channel_id}")
+        logging.info(f"Using BUFFER_CHANNEL_ID from env: {channel_id}")
         return channel_id
 
     try:
@@ -773,7 +773,7 @@ def get_linkedin_channel_id() -> str:
             raise RuntimeError("No LinkedIn channels found in Buffer account")
 
         channel_id = linkedin_channels[0]["id"]
-        logger.info(f"LinkedIn Channel ID: {channel_id}")
+        logging.info(f"LinkedIn Channel ID: {channel_id}")
         return channel_id
     except RuntimeError as e:
         if "Not authorized" in str(e) or "FORBIDDEN" in str(e):
