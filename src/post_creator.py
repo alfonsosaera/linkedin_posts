@@ -550,6 +550,7 @@ def process_pdf(pdf_path: str, upload_images: bool = True):
     loader = PyPDFLoader(pdf_path)
     docs = loader.load()
     paper_text = "\n".join(d.page_content for d in docs)
+    paper_text = paper_text.encode("utf-8", errors="ignore").decode("utf-8")
 
     # Load optional sidecar metadata (e.g., correct journal/URL when PDF is from an alternative source)
     base_path = os.path.splitext(pdf_path)[0]
