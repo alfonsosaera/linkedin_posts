@@ -36,11 +36,13 @@ Create a `.env` file in the project root:
 OPENAI_API_KEY=your_openai_api_key
 IMGBB_API_KEY=your_imgbb_api_key             # Optional, for image uploads
 BUFFER_API_KEY=your_buffer_api_key           # Optional, for Buffer API uploads
+BUFFER_CHANNEL_ID=your_channel_id            # Optional, set manually if Buffer API cannot discover it
 ```
 
 **Get Your Keys:**
 - **imgbb API Key**: https://api.imgbb.com/ (free tier includes API access)
 - **Buffer API Key**: Available in your Buffer account settings under "Integrations" → "API"
+- **Buffer Channel ID**: Found in Buffer dashboard under Settings → Channels → LinkedIn. Only needed if the Buffer API returns a permission error when discovering the channel automatically.
 
 ### Posting Schedule
 

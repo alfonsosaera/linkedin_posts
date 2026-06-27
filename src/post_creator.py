@@ -754,15 +754,34 @@ def run_buffer_query(query: str, variables: dict | None = None) -> dict:
 
 
 def get_linkedin_channel_id() -> str:
-    """Discover the first LinkedIn channel ID from the Buffer account."""
-    data = run_buffer_query(QUERY_CHANNELS)
-    channels = data.get("account", {}).get("channels", [])
+    """Discover the first LinkedIn channel ID from the Buffer account.
 
-    linkedin_channels = [ch for ch in channels if ch.get("service") == "linkedin"]
-    if not linkedin_channels:
-        raise RuntimeError("No LinkedIn channels found in Buffer account")
+    Falls back to BUFFER_CHANNEL_ID env var if API query fails (due to permissions).
+    """
+    channel_id = os.environ.get("BUFFER_CHANNEL_ID")
+    if channel_id:
+        logger.info(f"Using BUFFER_CHANNEL_ID from env: {channel_id}")
+        return channel_id
 
-    return linkedin_channels[0]["id"]
+    try:
+        data = run_buffer_query(QUERY_CHANNELS)
+        channels = data.get("account", {}).get("channels", [])
+
+        linkedin_channels = [ch for ch in channels if ch.get("service") == "linkedin"]
+        if not linkedin_channels:
+            raise RuntimeError("No LinkedIn channels found in Buffer account")
+
+        channel_id = linkedin_channels[0]["id"]
+        logger.info(f"LinkedIn Channel ID: {channel_id}")
+        return channel_id
+    except RuntimeError as e:
+        if "Not authorized" in str(e) or "FORBIDDEN" in str(e):
+            raise RuntimeError(
+                "Could not read channels from Buffer API (permission denied). "
+                "Set BUFFER_CHANNEL_ID in your .env file. "
+                "Find it in Buffer dashboard under Settings → Channels → LinkedIn"
+            ) from e
+        raise
 
 
 def parse_post_for_buffer(text: str) -> tuple[str, str, str]:
