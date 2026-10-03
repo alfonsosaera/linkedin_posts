@@ -33,7 +33,7 @@ from checkers import (
     CheckResult,
 )
 
-load_dotenv()
+load_dotenv(override=True)
 locale.setlocale(locale.LC_ALL, '')
 
 logging.basicConfig(
@@ -667,6 +667,7 @@ def process_pdf(pdf_path: str, upload_images: bool = True):
 # BUFFER API
 # ==========================
 BUFFER_API_URL = "https://api.buffer.com"
+LINKEDIN_COMMENT_MAX = 1250
 
 CREATE_LINKEDIN_POST = """
 mutation CreateLinkedInPost(
@@ -686,8 +687,12 @@ mutation CreateLinkedInPost(
       }
     }
   }) {
+    __typename
     ... on PostActionSuccess {
       post { id status }
+    }
+    ... on MutationError {
+      message
     }
   }
 }
@@ -713,8 +718,12 @@ mutation CreateLinkedInPostWithImage(
       }
     }
   }) {
+    __typename
     ... on PostActionSuccess {
       post { id status }
+    }
+    ... on MutationError {
+      message
     }
   }
 }
@@ -832,6 +841,9 @@ def upload_to_buffer(input_dir: str, start_date: datetime.date, schedule_path: s
     print(f"Found {len(txt_files)} LinkedIn post(s).")
     print()
 
+    succeeded = 0
+    failures: list[tuple[str, str, str]] = []
+
     for txt_file in txt_files:
         post_text = txt_file.read_text(encoding="utf-8")
         body, first_comment, paper_url = parse_post_for_buffer(post_text)
@@ -874,17 +886,34 @@ def upload_to_buffer(input_dir: str, start_date: datetime.date, schedule_path: s
             query = CREATE_LINKEDIN_POST
 
         try:
+            if len(first_comment) > LINKEDIN_COMMENT_MAX:
+                raise ValueError(
+                    f"first comment is {len(first_comment)} chars "
+                    f"(LinkedIn max {LINKEDIN_COMMENT_MAX}); trim links"
+                )
             result = run_buffer_query(query, variables)
-            post_id = result.get("createPost", {}).get("post", {}).get("id", "?")
+            payload = result.get("createPost") or {}
+            post_id = (payload.get("post") or {}).get("id")
+            if not post_id:
+                typename = payload.get("__typename", "unknown")
+                message = payload.get("message", "no message returned")
+                raise RuntimeError(f"Buffer rejected post ({typename}): {message}")
             print(
                 f"✓ {txt_file.name}"
                 f" → scheduled for {posting_time_str}"
                 f" (ID: {post_id})"
             )
+            succeeded += 1
         except Exception as e:
             print(f"✗ {txt_file.name} → ERROR: {e}")
+            failures.append((txt_file.name, posting_time_str, str(e)))
 
-    print("\nDone uploading to Buffer.")
+    print(f"\nScheduled {succeeded}/{len(txt_files)} post(s) in Buffer.")
+    if failures:
+        print(f"\n{len(failures)} post(s) NOT scheduled:")
+        for name, slot, error in failures:
+            print(f"  ✗ {name} (slot {slot}): {error}")
+        sys.exit(1)
 
 
 # ==========================
